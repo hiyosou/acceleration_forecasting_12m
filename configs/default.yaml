@@ -1,0 +1,16 @@
+seed: 42
+history_months: 5
+min_history_months: 3
+forecast_months: 12
+min_target_months: 8
+min_guide_months: 8
+top_k: 3
+max_current_difference: 0.5
+softmax_temperature: 0.1
+near_distance_m: 100.0
+diffusion_steps: 1000
+sampling_steps: 50
+num_samples: 100
+physical_min: 0.3
+physical_max: 5.0
+

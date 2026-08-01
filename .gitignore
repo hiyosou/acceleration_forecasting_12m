@@ -1,0 +1,15 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+artifacts/
+*.sqlite
+*.sqlite-*
+*.pt
+*.pth
+*.npy
+*.npz
+*.png
+*.log
+.test-tmp*/
+
