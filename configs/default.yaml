@@ -11,6 +11,5 @@ near_distance_m: 100.0
 diffusion_steps: 1000
 sampling_steps: 50
 num_samples: 100
-physical_min: 0.3
-physical_max: 5.0
-
+physical_min: 0.1
+physical_max: 6.0

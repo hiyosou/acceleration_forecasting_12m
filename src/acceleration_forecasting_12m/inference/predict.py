@@ -10,6 +10,7 @@ import torch
 
 from acceleration_forecasting_12m.common.io import write_json
 from acceleration_forecasting_12m.common.progress import progress_bar
+from acceleration_forecasting_12m.common.constants import PHYSICAL_MAX, PHYSICAL_MIN
 from acceleration_forecasting_12m.datasets.torch_dataset import ForecastDataset
 from .sampling import load_process, sample_target
 
@@ -33,6 +34,7 @@ def predict(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=100
             and int(previous.get("num_samples", -1)) == int(num_samples)
             and int(previous.get("sampling_steps", -1)) == int(sampling_steps)
             and str(previous.get("checkpoint")) == str(Path(checkpoint).resolve())
+            and previous.get("physical_bounds") == [PHYSICAL_MIN, PHYSICAL_MAX]
         )
         if not compatible:
             raise ValueError("Existing prediction output was created with incompatible settings")
@@ -88,6 +90,7 @@ def predict(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=100
         "target_count": count, "completed_before_run": len(completed_ids & set(requested_ids)),
         "generated_this_run": len(pending_indices),
         "num_samples": int(num_samples), "sampling_steps": int(sampling_steps),
+        "physical_bounds": [PHYSICAL_MIN, PHYSICAL_MAX],
         "elapsed_seconds": time.perf_counter() - started, "device": str(device),
         "checkpoint": str(Path(checkpoint).resolve()), "dataset_build_id": checkpoint_data["dataset_build_id"],
     }

@@ -297,7 +297,7 @@ def prepare_datasets(source_artifact_dir, retrieval_dir, output_dir, *, device=N
     guide_config = {
         **identity, "dataset_build_id": build_id, "top_k": TOP_K,
         "max_current_difference": 0.5, "near_distance_m": 100.0,
-        "residual_clip_physical": [-radius, radius], "final_physical_bounds": [0.3, 5.0],
+        "residual_clip_physical": [-radius, radius], "final_physical_bounds": [0.1, 6.0],
     }
     write_json(output_dir / "guide_search_config.json", guide_config)
     source_artifacts = {
@@ -317,4 +317,3 @@ def prepare_datasets(source_artifact_dir, retrieval_dir, output_dir, *, device=N
     }
     write_json(output_dir / "dataset_summary.json", summary)
     return summary
-

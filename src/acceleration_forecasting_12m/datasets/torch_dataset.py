@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .normalization import Normalization
+from acceleration_forecasting_12m.common.constants import PHYSICAL_MAX, PHYSICAL_MIN
 
 
 INPUT_ARRAYS = (
@@ -52,7 +53,7 @@ class ForecastDataset(Dataset):
     def denormalize_residual(self, values):
         return self.residual_norm.denormalize(values)
 
-    def physical_prediction(self, residual_normalized, index, bounds=(0.3, 5.0)):
+    def physical_prediction(self, residual_normalized, index, bounds=(PHYSICAL_MIN, PHYSICAL_MAX)):
         residual = self.denormalize_residual(residual_normalized)
         baseline = np.asarray(self.arrays["guide_baselines"][index], dtype=np.float32)
         return np.clip(residual + baseline, float(bounds[0]), float(bounds[1]))

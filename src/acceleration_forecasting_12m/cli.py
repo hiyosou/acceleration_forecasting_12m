@@ -63,7 +63,7 @@ def parser():
     evaluation.add_argument("--bootstrap", type=int, default=1000)
     evaluation.add_argument("--plot", action="store_true")
     evaluation.add_argument("--plot-max-targets", type=int, default=100)
-    evaluation.add_argument("--y-max", type=float, default=5.0)
+    evaluation.add_argument("--y-max", type=float, default=6.0)
     evaluation.add_argument("--dpi", type=int, default=150)
     evaluation.add_argument("--no-progress", action="store_true")
     return root
@@ -118,4 +118,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

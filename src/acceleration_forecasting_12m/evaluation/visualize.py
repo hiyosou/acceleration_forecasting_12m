@@ -14,7 +14,7 @@ plt.rcParams["font.family"] = "MS Gothic"
 
 
 def plot_target(path, metadata, history_values, history_masks, guide_values, guide_masks,
-                baseline, prediction, actual, target_mask, samples, *, y_max=5.0, dpi=150):
+                baseline, prediction, actual, target_mask, samples, *, y_max=6.0, dpi=150):
     anchor = pd.Timestamp(metadata["anchor_date"])
     history_dates = [pd.Timestamp(value) if value else pd.NaT for value in json.loads(metadata["history_dates"])]
     future_dates = pd.date_range(anchor.replace(day=1) + pd.DateOffset(months=1), periods=12, freq="MS")
@@ -60,4 +60,3 @@ def plot_target(path, metadata, history_values, history_masks, guide_values, gui
     bottom.set_xticks(months); bottom.grid(True, color="0.85"); bottom.legend()
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=dpi, transparent=True); plt.close(fig)
-

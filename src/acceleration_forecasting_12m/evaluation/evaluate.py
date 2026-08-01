@@ -21,7 +21,7 @@ def _sample_map(sample_dir, wanted):
 
 
 def evaluate(dataset_dir, prediction_dir, output_dir, *, bootstrap=1000, seed=42,
-             plot=False, plot_max_targets=100, y_max=5.0, dpi=150, progress=True):
+             plot=False, plot_max_targets=100, y_max=6.0, dpi=150, progress=True):
     dataset_dir, prediction_dir, output_dir = map(Path, (dataset_dir, prediction_dir, output_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
     inputs = dataset_dir / "inference" / "inputs"; targets = dataset_dir / "inference" / "targets"
@@ -75,4 +75,3 @@ def evaluate(dataset_dir, prediction_dir, output_dir, *, bootstrap=1000, seed=42
                 target_values[target_index], target_masks[target_index], samples[target_id], y_max=y_max, dpi=dpi,
             )
     return summary
-

@@ -2,6 +2,7 @@ import torch
 
 from acceleration_forecasting_12m.diffusion.process import DiffusionProcess
 from acceleration_forecasting_12m.models.unet import ResidualUNet12
+from acceleration_forecasting_12m.common.constants import PHYSICAL_MAX, PHYSICAL_MIN
 
 
 def batch(size=2):
@@ -24,6 +25,10 @@ def test_unet_is_twelve_month_attention_free_model():
 def test_unet_can_be_moved_without_module_apply_collision():
     model = ResidualUNet12().to("cpu")
     assert next(model.parameters()).device.type == "cpu"
+
+
+def test_final_physical_bounds_are_point_one_to_six():
+    assert (PHYSICAL_MIN, PHYSICAL_MAX) == (0.1, 6.0)
 
 
 def test_masked_diffusion_loss_is_finite_and_backpropagates():
