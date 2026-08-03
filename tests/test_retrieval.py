@@ -4,6 +4,7 @@ import sqlite3
 import numpy as np
 
 from acceleration_forecasting_12m.retrieval.build import _embedding_status, _truncate_future
+from acceleration_forecasting_12m.retrieval.autoencoder import WaveformAutoencoder, normalize_embeddings
 from acceleration_forecasting_12m.retrieval.database import SCHEMA
 from acceleration_forecasting_12m.retrieval.search import GuideIndex, SearchConfig
 
@@ -27,6 +28,19 @@ def test_embedding_must_be_finite_256d_and_nonzero():
     assert _embedding_status(np.ones(256, np.float32).tobytes(), 256, 256) == "valid"
     assert _embedding_status(np.zeros(256, np.float32).tobytes(), 256, 256) == "zero_norm_embedding"
     assert _embedding_status(np.ones(10, np.float32).tobytes(), 10, 256) == "invalid_embedding"
+
+
+def test_autoencoder_supports_all_comparison_dimensions():
+    import torch
+    waveform = torch.randn(2, 1, 500)
+    for dimension in (32, 64, 256):
+        model = WaveformAutoencoder(dimension)
+        reconstruction, embedding = model(waveform)
+        normalized = normalize_embeddings(embedding)
+        assert reconstruction.shape == waveform.shape
+        assert embedding.shape == (2, dimension)
+        assert torch.allclose(normalized.norm(dim=1), torch.ones(2), atol=1e-5)
+        assert _embedding_status(normalized[0].detach().numpy().astype(np.float32).tobytes(), dimension, dimension) == "valid"
 
 
 def test_search_excludes_same_dataset_and_selects_distinct_dates():

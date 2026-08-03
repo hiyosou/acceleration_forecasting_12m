@@ -2,14 +2,16 @@
 .pytest_cache/
 __pycache__/
 *.py[cod]
-artifacts/
+# Generated experiment artifacts (CSV/JSON/DB/models/plots can be very large).
+# Keep source, configs, and small test fixtures trackable outside these folders.
+/artifacts*/
 *.sqlite
 *.sqlite-*
 *.pt
 *.pth
 *.npy
 *.npz
+*.bin
 *.png
 *.log
 .test-tmp*/
-

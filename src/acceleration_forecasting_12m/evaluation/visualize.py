@@ -73,7 +73,8 @@ def plot_target(path, metadata, history_values, history_masks, guide_values, gui
     top.set(title=f"{metadata['direction']}方向 {metadata['bin_start_m']:.0f}-{metadata['bin_end_m']:.0f}m / 起点 {metadata['anchor_date']}",
             ylabel="絶対値最大加速度 [m/s²]", ylim=(0, y_max))
     top.xaxis.set_major_locator(mdates.MonthLocator(interval=2)); top.xaxis.set_major_formatter(mdates.DateFormatter("%y/%m"))
-    top.legend(fontsize=8, ncol=2); top.grid(True, color="0.85")
+    top.legend(fontsize=8, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+    top.grid(True, color="0.85")
 
     months = np.arange(1, 13)
     bottom.fill_between(months, p10, p90, color="red", alpha=0.15)
@@ -83,6 +84,7 @@ def plot_target(path, metadata, history_values, history_masks, guide_values, gui
     bottom.plot(months[valid_target], np.asarray(actual)[valid_target], "o-", color="black",
                 markerfacecolor="white", label="未来正解")
     bottom.set(xlabel="予測先 [か月]", ylabel="絶対値最大加速度 [m/s²]", xlim=(1, 12), ylim=(0, y_max))
-    bottom.set_xticks(months); bottom.grid(True, color="0.85"); bottom.legend()
+    bottom.set_xticks(months); bottom.grid(True, color="0.85")
+    bottom.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=dpi, transparent=True); plt.close(fig)
+    fig.savefig(path, dpi=dpi, transparent=True, bbox_inches="tight"); plt.close(fig)

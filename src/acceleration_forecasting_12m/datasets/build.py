@@ -82,7 +82,7 @@ def _encode_inference(rows, source_dir, device, batch_size=512, progress=True):
     with torch.inference_mode():
         batches = range(0, len(records), int(batch_size))
         for start in progress_bar(batches, enabled=progress, total=(len(records) + batch_size - 1) // batch_size,
-                                  desc="inference波形を256次元化", unit="batch"):
+                                  desc=f"inference波形を{int(checkpoint.get('embedding_dim', 256))}次元化", unit="batch"):
             batch = records[start:start + batch_size]
             values = np.stack([waveforms[int(item.waveform_index)] for item in batch]).copy()
             tensor = torch.from_numpy((values - mean) / std).unsqueeze(1).to(device)
