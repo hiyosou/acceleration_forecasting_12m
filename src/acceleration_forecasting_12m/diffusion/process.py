@@ -38,9 +38,9 @@ class DiffusionProcess:
 
     @torch.inference_mode()
     def ddim(self, batch, *, shape, sampling_steps=50, eta=0.0,
-             normalized_clip=None, generator=None):
+             normalized_clip=None, generator=None, initial_noise_scale=1.0):
         device = batch["current"].device
-        values = torch.randn(shape, device=device, generator=generator)
+        values = float(initial_noise_scale) * torch.randn(shape, device=device, generator=generator)
         sequence = np.linspace(self.steps - 1, 0, int(sampling_steps), dtype=int)
         for position, timestep in enumerate(sequence):
             next_timestep = sequence[position + 1] if position + 1 < len(sequence) else -1
@@ -56,4 +56,3 @@ class DiffusionProcess:
             random = torch.randn(values.shape, device=device, generator=generator) if next_timestep >= 0 else 0
             values = next_alpha.sqrt() * predicted_clean + direction + sigma * random
         return values
-

@@ -25,4 +25,14 @@ uv run python -m acceleration_forecasting_12m.cli predict --num-samples 100 --de
 uv run python -m acceleration_forecasting_12m.cli evaluate --bootstrap 1000 --plot
 ```
 
+Cross-Attention付き絶対値拡散版は既存Residual版と別成果物で実行します。
+
+```powershell
+uv run python -m acceleration_forecasting_12m.cli prepare-absolute --device cuda
+uv run python -m acceleration_forecasting_12m.cli train --dataset-dir artifacts/datasets_absolute_attention --output-dir artifacts/models_absolute_attention/unet --device cuda --no-resume
+uv run python -m acceleration_forecasting_12m.cli select-sampling --device cuda
+uv run python -m acceleration_forecasting_12m.cli predict --dataset-dir artifacts/datasets_absolute_attention --checkpoint artifacts/models_absolute_attention/unet/best_model.pt --output-dir artifacts/predictions_absolute_attention --device cuda --num-samples 100 --sampling-steps 100 --initial-noise-scale 1.0
+uv run python -m acceleration_forecasting_12m.cli evaluate --dataset-dir artifacts/datasets_absolute_attention --prediction-dir artifacts/predictions_absolute_attention --output-dir artifacts/evaluation_absolute_attention --bootstrap 1000 --plot --plot-max-targets 195
+```
+
 成果物は`artifacts/`以下へ保存され、Git管理対象には含まれません。各コマンドは進捗をstderr、最終結果JSONをstdoutへ出力します。`--no-progress`で進捗表示を無効化できます。

@@ -26,7 +26,7 @@ from .normalization import Normalization
 
 ARRAY_NAMES = (
     "current_values", "history_values", "history_masks", "guide_values", "guide_masks",
-    "guide_similarities", "retrieval_masks", "guide_baselines", "guide_softmax_weights",
+    "guide_deltas", "guide_similarities", "retrieval_masks", "guide_baselines", "guide_softmax_weights",
 )
 
 
@@ -149,12 +149,14 @@ def _construct_split(selected, split, index, query_lookup, allowed_splits, searc
         )
         guide_values = np.full((TOP_K, FORECAST_MONTHS), np.nan, np.float32)
         guide_masks = np.zeros((TOP_K, FORECAST_MONTHS), np.float32)
+        guide_deltas = np.zeros((TOP_K, FORECAST_MONTHS), np.float32)
         similarities = np.zeros(TOP_K, np.float32)
         retrieval_masks = np.zeros(TOP_K, np.float32)
         for rank, guide in enumerate(guides):
             values = np.asarray([np.nan if value is None else value for value in guide["future_values"]], np.float32)
             mask = np.asarray(guide["future_mask"], np.float32) * np.isfinite(values)
             guide_values[rank], guide_masks[rank] = values, mask
+            guide_deltas[rank] = np.where(mask > 0, values - float(guide["current_acc_z_max"]), np.nan)
             similarities[rank], retrieval_masks[rank] = guide["similarity"], 1
             assignments.append({
                 "split": split, "target_id": str(row["target_id"]), "guide_rank": rank + 1,
@@ -193,7 +195,7 @@ def _construct_split(selected, split, index, query_lookup, allowed_splits, searc
         for name, value in {
             "current_values": [current], "history_values": anchor["history"],
             "history_masks": anchor["history_mask"], "guide_values": guide_values,
-            "guide_masks": guide_masks, "guide_similarities": similarities,
+            "guide_masks": guide_masks, "guide_deltas": guide_deltas, "guide_similarities": similarities,
             "retrieval_masks": retrieval_masks, "guide_baselines": baseline,
             "guide_softmax_weights": weights,
         }.items():
@@ -206,7 +208,8 @@ def _construct_split(selected, split, index, query_lookup, allowed_splits, searc
 def prepare_datasets(source_artifact_dir, retrieval_dir, output_dir, *, device=None,
                      min_history_months=MIN_HISTORY_MONTHS, min_target_months=MIN_TARGET_MONTHS,
                      min_guide_months=MIN_GUIDE_MONTHS, temperature=0.1,
-                     max_train=None, max_validation=None, max_inference=None, progress=True):
+                     max_train=None, max_validation=None, max_inference=None, progress=True,
+                     target_mode="residual"):
     source_dir, retrieval_dir, output_dir = map(lambda value: Path(value).resolve(),
                                                 (source_artifact_dir, retrieval_dir, output_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -263,19 +266,21 @@ def prepare_datasets(source_artifact_dir, retrieval_dir, output_dir, *, device=N
     history = np.asarray(train_arrays["history_values"]); history_mask = np.asarray(train_arrays["history_masks"])
     condition_values.append(history[history_mask > 0])
     condition_norm = Normalization.fit(np.concatenate(condition_values), "model_train_current_and_history")
+    if target_mode not in {"residual", "absolute"}:
+        raise ValueError("target_mode must be residual or absolute")
     train_baseline = np.asarray(train_arrays["guide_baselines"])
-    train_residual = train_target - train_baseline
-    residual_norm = Normalization.fit(train_residual[train_mask > 0], "model_train_residual")
-    valid_residual = train_residual[(train_mask > 0) & np.isfinite(train_residual)]
-    low, high = np.percentile(valid_residual, [0.5, 99.5]); radius = float(max(abs(low), abs(high)))
+    training_values = train_target - train_baseline if target_mode == "residual" else train_target
+    target_norm = Normalization.fit(training_values[train_mask > 0], f"model_train_{target_mode}")
+    valid_training = training_values[(train_mask > 0) & np.isfinite(training_values)]
+    low, high = np.percentile(valid_training, [0.5, 99.5]); radius = float(max(abs(low), abs(high)))
 
     for split in ("model_train", "model_validation", "inference"):
         metadata, arrays, targets, masks, dates = built[split]
         destination = output_dir / split if split != "inference" else output_dir / "inference" / "inputs"
         _save_inputs(destination, metadata, arrays)
         if split != "inference":
-            residuals = targets - np.asarray(arrays["guide_baselines"], np.float32)
-            np.save(destination / "target_values.npy", residuals.astype(np.float32))
+            values = targets - np.asarray(arrays["guide_baselines"], np.float32) if target_mode == "residual" else targets
+            np.save(destination / "target_values.npy", values.astype(np.float32))
             np.save(destination / "target_masks.npy", masks.astype(np.float32))
         else:
             target_dir = output_dir / "inference" / "targets"; target_dir.mkdir(parents=True, exist_ok=True)
@@ -286,17 +291,19 @@ def prepare_datasets(source_artifact_dir, retrieval_dir, output_dir, *, device=N
             np.save(target_dir / "target_masks.npy", masks.astype(np.float32))
             (target_dir / "selected_dates.json").write_text(json.dumps(dates), encoding="utf-8")
     condition_norm.save(output_dir / "condition_normalization.json")
-    residual_norm.save(output_dir / "normalization.json")
+    target_norm.save(output_dir / "normalization.json")
     pd.DataFrame(assignments).to_csv(output_dir / "guide_assignments.csv", index=False, encoding="utf-8-sig")
     identity = {
         "history_months": HISTORY_MONTHS, "min_history_months": int(min_history_months),
         "forecast_months": FORECAST_MONTHS, "min_target_months": int(min_target_months),
         "min_guide_months": int(min_guide_months), "temperature": float(temperature),
+        "target_mode": target_mode,
     }
     build_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     guide_config = {
         **identity, "dataset_build_id": build_id, "top_k": TOP_K,
         "max_current_difference": 0.5, "near_distance_m": 100.0,
+        "sampling_clip_physical": [-radius, radius] if target_mode == "residual" else [0.1, 6.0],
         "residual_clip_physical": [-radius, radius], "final_physical_bounds": [0.1, 6.0],
     }
     write_json(output_dir / "guide_search_config.json", guide_config)
@@ -313,7 +320,8 @@ def prepare_datasets(source_artifact_dir, retrieval_dir, output_dir, *, device=N
         "selection_diagnostics": selection_diagnostics,
         "history_months": HISTORY_MONTHS, "min_history_months": int(min_history_months),
         "forecast_months": FORECAST_MONTHS, "min_target_months": int(min_target_months),
-        "min_guide_months": int(min_guide_months), "residual_clip_physical": [-radius, radius],
+        "min_guide_months": int(min_guide_months), "target_mode": target_mode,
+        "sampling_clip_physical": guide_config["sampling_clip_physical"],
     }
     write_json(output_dir / "dataset_summary.json", summary)
     return summary

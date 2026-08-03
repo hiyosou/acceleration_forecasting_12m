@@ -14,6 +14,7 @@ from acceleration_forecasting_12m.common.progress import progress_bar, progress_
 from acceleration_forecasting_12m.datasets.torch_dataset import ForecastDataset
 from acceleration_forecasting_12m.diffusion.process import DiffusionProcess
 from acceleration_forecasting_12m.models.unet import ResidualUNet12
+from acceleration_forecasting_12m.models.absolute_attention_unet import AbsoluteAttentionUNet12
 from .ema import EMA
 
 
@@ -60,8 +61,12 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, generator=generator, num_workers=0)
     valid_loader = DataLoader(valid_data, batch_size=batch_size, shuffle=False, num_workers=0)
     device = _device(device)
-    model_config = {"dropout": float(dropout), "forecast_months": 12, "cross_attention": False}
-    model = ResidualUNet12(dropout).to(device); process = DiffusionProcess(model, 1000).to(device)
+    target_mode = configuration.get("target_mode", "residual")
+    absolute = target_mode == "absolute"
+    model_config = {"dropout": float(dropout), "forecast_months": 12,
+                    "cross_attention": bool(absolute), "target_mode": target_mode}
+    model = (AbsoluteAttentionUNet12(dropout) if absolute else ResidualUNet12(dropout)).to(device)
+    process = DiffusionProcess(model, 1000).to(device)
     ema = EMA(model, ema_decay); optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lambda epoch: _learning_rate_factor(epoch, epochs)
@@ -126,4 +131,3 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
     }
     write_json(output_dir / "resolved_config.json", resolved)
     return resolved
-
