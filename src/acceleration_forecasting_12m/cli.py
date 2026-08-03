@@ -14,6 +14,7 @@ def parser():
     retrieval.add_argument("--source-artifact-dir", default=str(DEFAULT_SOURCE_ARTIFACTS))
     retrieval.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "retrieval"))
     retrieval.add_argument("--min-valid-months", type=int, default=8)
+    retrieval.add_argument("--embedding-dim", type=int, choices=(32, 64, 256), default=256)
     retrieval.add_argument("--no-progress", action="store_true")
 
     prepare = commands.add_parser("prepare-datasets", help="6時点入力・12か月Residualデータを構築")
@@ -146,6 +147,11 @@ def parser():
     evaluate_variance.add_argument("--bootstrap", type=int, default=1000); evaluate_variance.add_argument("--plot", action="store_true")
     evaluate_variance.add_argument("--plot-max-targets", type=int, default=195); evaluate_variance.add_argument("--y-max", type=float, default=6.0)
     evaluate_variance.add_argument("--dpi", type=int, default=150); evaluate_variance.add_argument("--no-progress", action="store_true")
+
+    compare_embedding = commands.add_parser("compare-embedding-dimensions", help="Summarize 256/64/32-dimensional experiments")
+    compare_embedding.add_argument("--root-dir", default="artifacts_embedding_comparison")
+    compare_embedding.add_argument("--source-256", default=str(DEFAULT_SOURCE_ARTIFACTS))
+    compare_embedding.add_argument("--device")
     return root
 
 
@@ -156,6 +162,7 @@ def main(argv=None):
         result = build_retrieval_database(
             args.source_artifact_dir, args.output_dir,
             min_valid_months=args.min_valid_months, progress=not args.no_progress,
+            embedding_dim=args.embedding_dim,
         )
     elif args.command in {"prepare-datasets", "prepare-absolute"}:
         from .datasets.build import prepare_datasets
@@ -223,6 +230,9 @@ def main(argv=None):
             bootstrap=args.bootstrap, plot=args.plot, plot_max_targets=args.plot_max_targets,
             y_max=args.y_max, dpi=args.dpi, progress=not args.no_progress,
         )
+    elif args.command == "compare-embedding-dimensions":
+        from .evaluation.embedding_comparison import build_comparison
+        result = build_comparison(args.root_dir, args.source_256, device=args.device)
     else:
         raise ValueError(f"Unsupported command: {args.command}")
     print(json.dumps(result, ensure_ascii=False, indent=2))

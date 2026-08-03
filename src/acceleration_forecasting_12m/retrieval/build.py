@@ -137,7 +137,7 @@ def build_retrieval_database(source_artifact_dir, output_dir, *, months=FORECAST
         valid_waveforms = defaultdict(list)
         waveform_reason_counts = Counter()
         for row in progress_bar(source.execute(query), enabled=progress, total=waveform_count,
-                                desc="256次元波形を検査", unit="waveform"):
+                                desc=f"{int(embedding_dim)}次元波形を検査", unit="waveform"):
             trend_id = str(row[10])
             if trend_id not in trend_rows:
                 continue
@@ -215,4 +215,3 @@ def build_retrieval_database(source_artifact_dir, output_dir, *, months=FORECAST
     os.replace(temp_db, final_db)
     write_json(output_dir / "database_summary.json", summary)
     return summary
-
