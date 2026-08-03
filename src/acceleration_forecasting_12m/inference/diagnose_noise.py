@@ -29,6 +29,9 @@ def _scenario(batch, name):
     if name == "guide_shuffled":
         for key in ("guide_values", "guide_deltas", "guide_mask", "guide_similarities", "retrieval_mask"):
             output[key] = torch.roll(output[key], shifts=1, dims=0)
+    if name == "guide_disabled":
+        for key in ("guide_values", "guide_deltas", "guide_mask", "guide_similarities", "retrieval_mask"):
+            output[key] = torch.zeros_like(output[key])
     if name in {"history_disabled", "all_conditions_disabled"}:
         for key in ("history", "history_mask"):
             output[key] = torch.zeros_like(output[key])
@@ -54,8 +57,12 @@ def diagnose_noise(dataset_dir, checkpoint, output_dir, *, device=None, seed=42)
         noise = torch.randn(batch["target"].shape, device=device, generator=generator)
         alpha = process.alpha_bars[timesteps][:, None]
         noisy = alpha.sqrt() * batch["target"] + (1 - alpha).sqrt() * noise
-        for scenario in ("normal", "guide_shuffled", "history_disabled", "all_conditions_disabled"):
+        normal_prediction = None
+        for scenario in ("normal", "guide_shuffled", "guide_disabled"):
             predicted = process.model(noisy, timesteps, _scenario(batch, scenario))
+            model_stats = process.model.diagnostic_stats() if hasattr(process.model, "diagnostic_stats") else {}
+            if normal_prediction is None:
+                normal_prediction = predicted.detach()
             mask = batch["target_mask"]
             epsilon_mse = (((predicted - noise).square() * mask).sum() / mask.sum().clamp_min(1)).item()
             predicted_x0 = (noisy - (1 - alpha).sqrt() * predicted) / alpha.sqrt()
@@ -68,12 +75,26 @@ def diagnose_noise(dataset_dir, checkpoint, output_dir, *, device=None, seed=42)
                 "x0_rmse_physical": float(error[valid].square().mean().sqrt()),
                 "mean_snr": float((alpha / (1 - alpha).clamp_min(1e-12)).mean()),
                 "mean_valid_months": float(mask.sum(dim=1).mean()),
+                "output_mae_from_normal": float((predicted - normal_prediction).abs().mean()),
+                **model_stats,
             })
     frame = pd.DataFrame(rows)
     normal = frame.loc[frame["scenario"] == "normal", ["timestep_start", "epsilon_mse"]].rename(columns={"epsilon_mse": "normal_epsilon_mse"})
     frame = frame.merge(normal, on="timestep_start", how="left")
     frame["epsilon_mse_change_from_normal"] = frame["epsilon_mse"] - frame["normal_epsilon_mse"]
     frame.to_csv(output_dir / "timestep_condition_diagnostics.csv", index=False, encoding="utf-8-sig")
+    baseline_path = output_dir.parent / "diagnostics_absolute_attention" / "timestep_condition_diagnostics.csv"
+    if hasattr(process.model, "reference_blocks") and baseline_path.is_file():
+        baseline = pd.read_csv(baseline_path, encoding="utf-8-sig")
+        columns = ["timestep_start", "scenario", "epsilon_mse", "x0_mae_physical",
+                   "epsilon_mse_change_from_normal"]
+        baseline = baseline.loc[baseline["scenario"].isin(["normal", "guide_shuffled"]), columns]
+        current = frame.loc[frame["scenario"].isin(["normal", "guide_shuffled"]),
+                            columns + ["output_mae_from_normal", "reference_context_norm"]]
+        baseline["model"] = "cross_attention"; current["model"] = "reference_modulated"
+        pd.concat([baseline, current], ignore_index=True).to_csv(
+            output_dir / "comparison_with_cross_attention.csv", index=False, encoding="utf-8-sig"
+        )
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
     labels = [f"{a}-{b}" for a, b in bins]
     for scenario, group in frame.groupby("scenario", sort=False):

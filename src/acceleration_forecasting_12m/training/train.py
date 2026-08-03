@@ -15,6 +15,7 @@ from acceleration_forecasting_12m.datasets.torch_dataset import ForecastDataset
 from acceleration_forecasting_12m.diffusion.process import DiffusionProcess
 from acceleration_forecasting_12m.models.unet import ResidualUNet12
 from acceleration_forecasting_12m.models.absolute_attention_unet import AbsoluteAttentionUNet12
+from acceleration_forecasting_12m.models.reference_modulated_unet import ReferenceModulatedUNet12
 from .ema import EMA
 
 
@@ -66,7 +67,8 @@ def _validation_loss(process, loader, device, seed=42):
 def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
           accumulation_steps=2, learning_rate=1e-4, weight_decay=1e-4,
           dropout=0.1, patience=20, min_delta=1e-4, ema_decay=0.999,
-          seed=42, resume=True, progress=True, min_snr_gamma=None, condition_dropout=0.0):
+          seed=42, resume=True, progress=True, min_snr_gamma=None, condition_dropout=0.0,
+          attention_type=None):
     torch.manual_seed(seed)
     dataset_dir, output_dir = Path(dataset_dir).resolve(), Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -80,12 +82,29 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
     device = _device(device)
     target_mode = configuration.get("target_mode", "residual")
     absolute = target_mode == "absolute"
+    attention_type = attention_type or ("cross_attention" if absolute else "none")
+    if attention_type not in {"none", "cross_attention", "reference_modulated"}:
+        raise ValueError("attention_type must be none, cross_attention, or reference_modulated")
+    if not absolute and attention_type != "none":
+        raise ValueError("Attention models require an absolute-value dataset")
     cfg_enabled = absolute and float(condition_dropout) > 0
     model_config = {"dropout": float(dropout), "forecast_months": 12,
-                    "cross_attention": bool(absolute), "target_mode": target_mode,
+                    "cross_attention": attention_type == "cross_attention", "target_mode": target_mode,
                     "min_snr_gamma": None if min_snr_gamma is None else float(min_snr_gamma),
-                    "condition_dropout": float(condition_dropout), "condition_indicator": bool(cfg_enabled)}
-    model = (AbsoluteAttentionUNet12(dropout, condition_indicator=cfg_enabled) if absolute else ResidualUNet12(dropout)).to(device)
+                    "condition_dropout": float(condition_dropout), "condition_indicator": bool(cfg_enabled),
+                    "attention_type": attention_type, "reference_tokens": 36 if attention_type == "reference_modulated" else None,
+                    "reference_dim": 64 if attention_type == "reference_modulated" else None,
+                    "reference_injection_blocks": 10 if attention_type == "reference_modulated" else None,
+                    "prediction_type": "epsilon"}
+    if attention_type == "reference_modulated":
+        if cfg_enabled:
+            raise ValueError("Reference-modulated model does not use classifier-free guidance")
+        model = ReferenceModulatedUNet12(dropout)
+    elif absolute:
+        model = AbsoluteAttentionUNet12(dropout, condition_indicator=cfg_enabled)
+    else:
+        model = ResidualUNet12(dropout)
+    model = model.to(device)
     process = DiffusionProcess(model, 1000, min_snr_gamma=min_snr_gamma).to(device)
     ema = EMA(model, ema_decay); optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(

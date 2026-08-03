@@ -80,10 +80,15 @@ def evaluate(dataset_dir, prediction_dir, output_dir, *, bootstrap=1000, seed=42
                        "difference": summary[name] - previous[name]}
                       for name in metric_names if name in previous and name in summary]
         pd.DataFrame(comparison).to_csv(output_dir / "comparison_with_residual.csv", index=False, encoding="utf-8-sig")
+    output_name = output_dir.name
+    current_label = ("reference_modulated" if "reference_modulated" in output_name else
+                     "min_snr_uncalibrated" if "min_snr_uncalibrated" in output_name else
+                     "variance_selected")
     comparison_sources = {
         "residual": output_dir.parent / "evaluation" / "evaluation_summary.json",
         "absolute_attention": output_dir.parent / "evaluation_absolute_attention" / "evaluation_summary.json",
-        "variance_selected": output_dir / "evaluation_summary.json",
+        "min_snr_uncalibrated": output_dir.parent / "evaluation_absolute_attention_min_snr_uncalibrated" / "evaluation_summary.json",
+        current_label: output_dir / "evaluation_summary.json",
     }
     model_rows = []
     for model_name, summary_path in comparison_sources.items():
@@ -93,7 +98,12 @@ def evaluate(dataset_dir, prediction_dir, output_dir, *, bootstrap=1000, seed=42
         values = json.loads(summary_path.read_text(encoding="utf-8"))
         model_rows.append({"model": model_name, **{name: values.get(name) for name in metric_names}})
     if model_rows:
-        pd.DataFrame(model_rows).to_csv(output_dir / "comparison_all_models.csv", index=False, encoding="utf-8-sig")
+        comparison_frame = pd.DataFrame(model_rows)
+        comparison_frame.to_csv(output_dir / "comparison_all_models.csv", index=False, encoding="utf-8-sig")
+        if current_label == "reference_modulated":
+            comparison_frame.loc[comparison_frame["model"].isin(
+                ["min_snr_uncalibrated", "reference_modulated"]
+            )].to_csv(output_dir / "comparison_with_min_snr.csv", index=False, encoding="utf-8-sig")
     if plot and not frame.empty:
         selected = frame.sort_values("RMSE", ascending=False).head(int(plot_max_targets))["target_id"].astype(str).tolist()
         samples = _sample_map(prediction_dir / "samples", set(selected))

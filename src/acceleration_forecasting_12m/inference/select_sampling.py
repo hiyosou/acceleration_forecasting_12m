@@ -12,7 +12,7 @@ from .validate import validate
 
 
 def select_sampling(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=100,
-                    max_records=None, seed=42, progress=True):
+                    max_records=None, seed=42, progress=True, selection_policy="quality_gate"):
     output_dir = Path(output_dir).resolve(); output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     combinations = [(scale, steps) for scale in (1.0, 0.75, 0.5) for steps in (50, 100, 200)]
@@ -25,24 +25,39 @@ def select_sampling(dataset_dir, checkpoint, output_dir, *, device=None, num_sam
         )
         rows.append({**result, "elapsed_seconds": time.perf_counter() - started})
     frame = pd.DataFrame(rows)
-    frame["finite_and_ordered"] = frame["all_finite"].astype(bool)
+    frame["finite_and_ordered"] = (frame["all_finite"].astype(bool)
+                                    & frame["quantile_order_valid"].astype(bool)
+                                    & frame["physical_range_valid"].astype(bool))
     frame["coverage_pass"] = frame["coverage_p10_p90"] >= 0.75
     frame["mae_pass"] = frame["MAE"] <= 0.4009
     frame["width_0_7_pass"] = frame["mean_interval_width"] <= 0.7
     frame["width_0_5_pass"] = frame["mean_interval_width"] <= 0.5
-    eligible = frame.loc[frame["finite_and_ordered"] & frame["coverage_pass"] & frame["mae_pass"]]
-    if not eligible.empty:
-        selected = eligible.sort_values(["mean_interval_width", "sampling_steps"], kind="mergesort").iloc[0]
-        reason = "coverage>=75%, MAE<=0.4009; minimum interval width"
+    if selection_policy == "mae_width_coverage":
+        valid = frame.loc[frame["finite_and_ordered"]].copy()
+        if valid.empty:
+            raise ValueError("No finite, ordered, in-range validation configuration")
+        minimum_mae = float(valid["MAE"].min())
+        near_mae = valid.loc[valid["MAE"] <= minimum_mae + 0.01]
+        minimum_width = float(near_mae["mean_interval_width"].min())
+        near_width = near_mae.loc[near_mae["mean_interval_width"] <= minimum_width + 0.05]
+        selected = near_width.sort_values(["coverage_p10_p90", "sampling_steps"],
+                                          ascending=[False, True], kind="mergesort").iloc[0]
+        reason = "minimum MAE; within 0.01 minimum width; within 0.05 maximum coverage; minimum steps"
     else:
-        fallback = frame.loc[frame["finite_and_ordered"] & frame["coverage_pass"]]
-        if fallback.empty: fallback = frame.loc[frame["finite_and_ordered"]]
-        selected = fallback.sort_values(["MAE", "mean_interval_width", "sampling_steps"], kind="mergesort").iloc[0]
-        reason = "quality targets unmet; minimum MAE among valid fallback configurations"
+        eligible = frame.loc[frame["finite_and_ordered"] & frame["coverage_pass"] & frame["mae_pass"]]
+        if not eligible.empty:
+            selected = eligible.sort_values(["mean_interval_width", "sampling_steps"], kind="mergesort").iloc[0]
+            reason = "coverage>=75%, MAE<=0.4009; minimum interval width"
+        else:
+            fallback = frame.loc[frame["finite_and_ordered"] & frame["coverage_pass"]]
+            if fallback.empty: fallback = frame.loc[frame["finite_and_ordered"]]
+            selected = fallback.sort_values(["MAE", "mean_interval_width", "sampling_steps"], kind="mergesort").iloc[0]
+            reason = "quality targets unmet; minimum MAE among valid fallback configurations"
     frame.to_csv(output_dir / "sampling_grid.csv", index=False, encoding="utf-8-sig")
     result = {
         "initial_noise_scale": float(selected["initial_noise_scale"]),
         "sampling_steps": int(selected["sampling_steps"]), "num_samples": int(num_samples),
+        "checkpoint": str(Path(checkpoint).resolve()), "selection_policy": selection_policy,
         "selection_reason": reason, "metrics": {
             key: float(selected[key]) for key in ("MAE", "RMSE", "coverage_p10_p90",
                                                    "mean_interval_width", "ensemble_mean_std")

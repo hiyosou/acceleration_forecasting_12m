@@ -23,7 +23,7 @@ def validate(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=10
     process, _ = load_process(checkpoint, device)
     dataset = ForecastDataset(dataset_dir / "model_validation", dataset_dir)
     count = min(len(dataset), int(max_records)) if max_records is not None else len(dataset)
-    rows = []
+    rows = []; all_samples_finite = True; quantile_order_valid = True; physical_range_valid = True
     for index in progress_bar(range(count), enabled=progress, total=count, desc="validation生成", unit="target"):
         meta = dataset.metadata.iloc[index]; target_id = str(meta["target_id"])
         samples = sample_target(process, dataset, index, target_id, num_samples=num_samples,
@@ -31,6 +31,9 @@ def validate(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=10
                                 initial_noise_scale=initial_noise_scale, cfg_scale=cfg_scale,
                                 variance_scale=variance_scale)
         median = np.median(samples, axis=0); p10 = np.percentile(samples, 10, axis=0); p90 = np.percentile(samples, 90, axis=0)
+        all_samples_finite &= bool(np.isfinite(samples).all())
+        quantile_order_valid &= bool(np.all(p10 <= median) and np.all(median <= p90))
+        physical_range_valid &= bool(samples.min() >= 0.1 - 1e-6 and samples.max() <= 6.0 + 1e-6)
         metrics = target_metrics(dataset.physical_target(index), dataset.target_masks[index], median, p10, p90)
         if metrics is not None:
             rows.append({"target_id": target_id, "dataset_id": meta["dataset_id"],
@@ -42,7 +45,9 @@ def validate(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=10
         "ensemble_mean_std",
     )}
     summary.update({
-        "target_count": int(len(frame)), "all_finite": bool(np.isfinite(frame[["MAE", "RMSE", "mean_interval_width"]]).all().all()),
+        "target_count": int(len(frame)),
+        "all_finite": bool(all_samples_finite and np.isfinite(frame[["MAE", "RMSE", "mean_interval_width"]]).all().all()),
+        "quantile_order_valid": bool(quantile_order_valid), "physical_range_valid": bool(physical_range_valid),
         "forecast_months": 12, "num_samples": int(num_samples), "sampling_steps": int(sampling_steps),
         "initial_noise_scale": float(initial_noise_scale),
         "cfg_scale": float(cfg_scale), "variance_scale": float(variance_scale),

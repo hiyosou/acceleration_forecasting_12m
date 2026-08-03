@@ -13,6 +13,7 @@ from acceleration_forecasting_12m.datasets.normalization import Normalization
 from acceleration_forecasting_12m.diffusion.process import DiffusionProcess
 from acceleration_forecasting_12m.models.unet import ResidualUNet12
 from acceleration_forecasting_12m.models.absolute_attention_unet import AbsoluteAttentionUNet12
+from acceleration_forecasting_12m.models.reference_modulated_unet import ReferenceModulatedUNet12
 
 
 def load_process(checkpoint_path, device):
@@ -20,9 +21,14 @@ def load_process(checkpoint_path, device):
     config = checkpoint["model_config"]
     if config.get("forecast_months") != 12:
         raise ValueError("Checkpoint is not a twelve-month model")
-    model = AbsoluteAttentionUNet12(
-        config["dropout"], condition_indicator=config.get("condition_indicator", False)
-    ) if config.get("target_mode") == "absolute" else ResidualUNet12(config["dropout"])
+    if config.get("attention_type") == "reference_modulated":
+        model = ReferenceModulatedUNet12(config["dropout"])
+    elif config.get("target_mode") == "absolute":
+        model = AbsoluteAttentionUNet12(
+            config["dropout"], condition_indicator=config.get("condition_indicator", False)
+        )
+    else:
+        model = ResidualUNet12(config["dropout"])
     model.load_state_dict(checkpoint["ema_state_dict"]); model.eval()
     return DiffusionProcess(model, 1000, min_snr_gamma=config.get("min_snr_gamma")).to(device), checkpoint
 

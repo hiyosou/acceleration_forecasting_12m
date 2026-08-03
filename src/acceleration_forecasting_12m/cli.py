@@ -44,6 +44,7 @@ def parser():
     train_parser.add_argument("--no-progress", action="store_true")
     train_parser.add_argument("--min-snr-gamma", type=float)
     train_parser.add_argument("--condition-dropout", type=float, default=0.0)
+    train_parser.add_argument("--attention-type", choices=("none", "cross_attention", "reference_modulated"))
 
     diagnostic = commands.add_parser("diagnose-noise", help="Diagnose timestep errors and condition usage")
     diagnostic.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets_absolute_attention"))
@@ -68,6 +69,13 @@ def parser():
     selection.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "validation_absolute_attention"))
     selection.add_argument("--device"); selection.add_argument("--num-samples", type=int, default=100)
     selection.add_argument("--max-records", type=int); selection.add_argument("--no-progress", action="store_true")
+
+    reference_selection = commands.add_parser("select-reference-sampling", help="Select DDIM settings for reference-modulated model")
+    reference_selection.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets_absolute_attention"))
+    reference_selection.add_argument("--checkpoint", default=str(DEFAULT_ARTIFACTS / "models_absolute_reference_modulated" / "unet" / "best_model.pt"))
+    reference_selection.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "validation_absolute_reference_modulated"))
+    reference_selection.add_argument("--device"); reference_selection.add_argument("--num-samples", type=int, default=100)
+    reference_selection.add_argument("--max-records", type=int); reference_selection.add_argument("--no-progress", action="store_true")
 
     prediction = commands.add_parser("predict", help="inferenceをDDIMで正式予測")
     prediction.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets"))
@@ -97,6 +105,13 @@ def parser():
     predict_variance.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "predictions_absolute_attention_variance"))
     predict_variance.add_argument("--device"); predict_variance.add_argument("--num-samples", type=int, default=100)
     predict_variance.add_argument("--no-progress", action="store_true")
+
+    predict_reference = commands.add_parser("predict-reference", help="Predict with selected reference-modulated settings")
+    predict_reference.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets_absolute_attention"))
+    predict_reference.add_argument("--selection", default=str(DEFAULT_ARTIFACTS / "validation_absolute_reference_modulated" / "selected_sampling_config.json"))
+    predict_reference.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "predictions_absolute_reference_modulated"))
+    predict_reference.add_argument("--device"); predict_reference.add_argument("--num-samples", type=int, default=100)
+    predict_reference.add_argument("--no-progress", action="store_true")
 
     evaluation = commands.add_parser("evaluate", help="正解分離後に予測を評価")
     evaluation.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets"))
@@ -141,6 +156,7 @@ def main(argv=None):
             args.dataset_dir, args.output_dir, device=args.device, epochs=args.epochs,
             batch_size=args.batch_size, resume=not args.no_resume, progress=not args.no_progress,
             min_snr_gamma=args.min_snr_gamma, condition_dropout=args.condition_dropout,
+            attention_type=args.attention_type,
         )
     elif args.command == "diagnose-noise":
         from .inference.diagnose_noise import diagnose_noise
@@ -153,25 +169,27 @@ def main(argv=None):
             max_records=args.max_records, progress=not args.no_progress,
             initial_noise_scale=args.initial_noise_scale,
         )
-    elif args.command == "select-sampling":
+    elif args.command in {"select-sampling", "select-reference-sampling"}:
         from .inference.select_sampling import select_sampling
         result = select_sampling(
             args.dataset_dir, args.checkpoint, args.output_dir, device=args.device,
             num_samples=args.num_samples, max_records=args.max_records,
             progress=not args.no_progress,
+            selection_policy="mae_width_coverage" if args.command == "select-reference-sampling" else "quality_gate",
         )
     elif args.command == "select-variance-config":
         from .inference.select_variance import select_variance_config
         result = select_variance_config(args.dataset_dir, args.min_snr_checkpoint, args.cfg_checkpoint,
                                         args.output_dir, device=args.device, num_samples=args.num_samples,
                                         progress=not args.no_progress)
-    elif args.command == "predict-variance":
+    elif args.command in {"predict-variance", "predict-reference"}:
         from .inference.predict import predict
         config = json.loads(open(args.selection, encoding="utf-8").read())
         result = predict(args.dataset_dir, config["checkpoint"], args.output_dir, device=args.device,
                          num_samples=args.num_samples, sampling_steps=int(config["sampling_steps"]),
                          progress=not args.no_progress, initial_noise_scale=float(config["initial_noise_scale"]),
-                         cfg_scale=float(config["cfg_scale"]), variance_scale=float(config["variance_scale"]))
+                         cfg_scale=float(config.get("cfg_scale", 1.0)),
+                         variance_scale=float(config.get("variance_scale", 1.0)))
     elif args.command == "predict":
         from .inference.predict import predict
         result = predict(

@@ -61,8 +61,8 @@ def plot_target(path, metadata, history_values, history_masks, guide_values, gui
     if baseline is not None:
         top.plot(future_dates, baseline, color="darkorange", linewidth=2, label="Softmax guide baseline")
     top.fill_between(future_dates, p10, p90, color="red", alpha=0.15, label="予測p10-p90")
-    top.plot(future_dates, sample, "o-", color="red", linewidth=2,
-             label=f"生成例 sample {single_sample_index}")
+    top.scatter(future_dates, sample, s=34, color="red", zorder=6,
+                label=f"生成例 sample {single_sample_index}")
     valid_target = np.asarray(target_mask, bool)
     top.plot(future_dates[valid_target], np.asarray(actual)[valid_target], "o-", color="black",
              markerfacecolor="white", label="未来正解")
@@ -76,9 +76,9 @@ def plot_target(path, metadata, history_values, history_masks, guide_values, gui
     top.legend(fontsize=8, ncol=2); top.grid(True, color="0.85")
 
     months = np.arange(1, 13)
-    for generated in samples: bottom.plot(months, generated, color="red", alpha=0.04, linewidth=0.7)
     bottom.fill_between(months, p10, p90, color="red", alpha=0.15)
-    bottom.plot(months, sample, color="darkred", linewidth=2.2, label=f"生成例 sample {single_sample_index}")
+    bottom.scatter(months, sample, s=34, color="darkred", zorder=6,
+                   label=f"生成例 sample {single_sample_index}")
     if baseline is not None: bottom.plot(months, baseline, color="darkorange", linewidth=2, label="guide baseline")
     bottom.plot(months[valid_target], np.asarray(actual)[valid_target], "o-", color="black",
                 markerfacecolor="white", label="未来正解")

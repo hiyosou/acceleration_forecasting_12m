@@ -7,6 +7,9 @@ from acceleration_forecasting_12m.common.constants import PHYSICAL_MAX, PHYSICAL
 from acceleration_forecasting_12m.models.absolute_attention_unet import AbsoluteAttentionUNet12, GuideEncoder12
 from acceleration_forecasting_12m.training.train import _drop_conditions
 from acceleration_forecasting_12m.inference.select_variance import calibrate_samples
+from acceleration_forecasting_12m.models.reference_modulated_unet import (
+    ReferenceModulatedAttention, ReferenceModulatedUNet12,
+)
 
 
 def batch(size=2):
@@ -123,6 +126,33 @@ def test_variance_calibration_identity_and_monotonic_width():
     narrow = calibrate_samples(samples, 0.1)
     assert torch.allclose(torch.from_numpy(identity), torch.from_numpy(samples))
     assert float(narrow.max() - narrow.min()) < float(identity.max() - identity.min())
+
+
+def test_reference_modulated_model_has_ten_injections_and_finite_output():
+    data = attention_batch(2)
+    model = ReferenceModulatedUNet12(dropout=0.0)
+    output = model(torch.randn(2, 12), torch.tensor([2, 5]), data)
+    assert output.shape == (2, 12) and torch.isfinite(output).all()
+    assert len(model.reference_blocks) == 10
+    assert sum(isinstance(module, ReferenceModulatedAttention) for module in model.modules()) == 10
+    assert not any(module.__class__.__name__ == "MaskedCrossAttention" for module in model.modules())
+
+
+def test_reference_modulation_masks_invalid_tokens_and_changes_with_reference():
+    data = attention_batch(2)
+    model = ReferenceModulatedUNet12(dropout=0.0).eval()
+    noisy, timesteps = torch.randn(2, 12), torch.tensor([2, 5])
+    normal = model(noisy, timesteps, data)
+    changed_data = dict(data); changed_data["guide_values"] = data["guide_values"] + 2.0
+    changed = model(noisy, timesteps, changed_data)
+    assert not torch.allclose(normal, changed)
+    disabled = dict(data)
+    disabled["guide_mask"] = torch.zeros_like(data["guide_mask"])
+    disabled["retrieval_mask"] = torch.zeros_like(data["retrieval_mask"])
+    output = model(noisy, timesteps, disabled)
+    assert torch.isfinite(output).all()
+    for block in model.reference_blocks:
+        assert torch.count_nonzero(block.reference_attention.last_attention) == 0
 
 
 def test_ddim_is_reproducible_and_clipped():
