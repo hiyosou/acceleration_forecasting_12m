@@ -33,23 +33,40 @@ def _learning_rate_factor(epoch, epochs, warmup=5, minimum_ratio=0.01):
     return minimum_ratio + (1 - minimum_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
 
 
+def _drop_conditions(batch, probability):
+    if float(probability) <= 0:
+        return batch
+    batch = dict(batch)
+    reference = batch["current"]
+    dropped = torch.rand((reference.shape[0], 1), device=reference.device) < float(probability)
+    batch["condition_present"] = (~dropped).to(reference.dtype)
+    for key in ("current", "history", "history_mask", "guide_values", "guide_deltas",
+                "guide_mask", "guide_similarities", "retrieval_mask"):
+        if key in batch:
+            shape = [reference.shape[0]] + [1] * (batch[key].ndim - 1)
+            batch[key] = batch[key] * (~dropped).reshape(shape).to(batch[key].dtype)
+    return batch
+
+
 @torch.inference_mode()
 def _validation_loss(process, loader, device, seed=42):
-    process.model.eval(); total, count = 0.0, 0
+    process.model.eval(); sums = {key: 0.0 for key in ("loss", "unweighted_epsilon_mse", "mean_snr", "mean_min_snr_weight")}; count = 0
     generator = torch.Generator(device=device).manual_seed(seed)
     for batch in loader:
         batch = _move(batch, device)
         timesteps = torch.randint(0, process.steps, (batch["target"].shape[0],), device=device, generator=generator)
         noise = torch.randn(batch["target"].shape, device=device, generator=generator)
-        loss = process.training_loss(batch, noise=noise, timesteps=timesteps)
-        total += float(loss) * batch["target"].shape[0]; count += batch["target"].shape[0]
-    return total / max(count, 1)
+        details = process.loss_details(batch, noise=noise, timesteps=timesteps)
+        size = batch["target"].shape[0]
+        for key in sums: sums[key] += float(details[key]) * size
+        count += size
+    return {key: value / max(count, 1) for key, value in sums.items()}
 
 
 def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
           accumulation_steps=2, learning_rate=1e-4, weight_decay=1e-4,
           dropout=0.1, patience=20, min_delta=1e-4, ema_decay=0.999,
-          seed=42, resume=True, progress=True):
+          seed=42, resume=True, progress=True, min_snr_gamma=None, condition_dropout=0.0):
     torch.manual_seed(seed)
     dataset_dir, output_dir = Path(dataset_dir).resolve(), Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -63,10 +80,13 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
     device = _device(device)
     target_mode = configuration.get("target_mode", "residual")
     absolute = target_mode == "absolute"
+    cfg_enabled = absolute and float(condition_dropout) > 0
     model_config = {"dropout": float(dropout), "forecast_months": 12,
-                    "cross_attention": bool(absolute), "target_mode": target_mode}
-    model = (AbsoluteAttentionUNet12(dropout) if absolute else ResidualUNet12(dropout)).to(device)
-    process = DiffusionProcess(model, 1000).to(device)
+                    "cross_attention": bool(absolute), "target_mode": target_mode,
+                    "min_snr_gamma": None if min_snr_gamma is None else float(min_snr_gamma),
+                    "condition_dropout": float(condition_dropout), "condition_indicator": bool(cfg_enabled)}
+    model = (AbsoluteAttentionUNet12(dropout, condition_indicator=cfg_enabled) if absolute else ResidualUNet12(dropout)).to(device)
+    process = DiffusionProcess(model, 1000, min_snr_gamma=min_snr_gamma).to(device)
     ema = EMA(model, ema_decay); optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lambda epoch: _learning_rate_factor(epoch, epochs)
@@ -90,25 +110,35 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
     outer = progress_bar(range(start_epoch, epochs), enabled=progress, desc="学習epoch", unit="epoch")
     started = time.perf_counter()
     for epoch in outer:
-        model.train(); optimizer.zero_grad(set_to_none=True); running, batches = 0.0, 0
+        model.train(); optimizer.zero_grad(set_to_none=True)
+        running = {key: 0.0 for key in ("loss", "unweighted_epsilon_mse", "mean_snr", "mean_min_snr_weight")}; batches = 0
         inner = progress_bar(train_loader, enabled=progress, desc=f"epoch {epoch + 1}", unit="batch", leave=False)
         for batch_index, batch in enumerate(inner):
             batch = _move(batch, device)
+            batch = _drop_conditions(batch, condition_dropout)
             with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=scaler_enabled):
-                loss = process.training_loss(batch) / accumulation_steps
+                details = process.loss_details(batch)
+                loss = details["loss"] / accumulation_steps
             scaler.scale(loss).backward()
             if (batch_index + 1) % accumulation_steps == 0 or batch_index + 1 == len(train_loader):
                 scaler.unscale_(optimizer); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 scaler.step(optimizer); scaler.update(); optimizer.zero_grad(set_to_none=True); ema.update(model)
-            running += float(loss.detach()) * accumulation_steps; batches += 1
-        validation_process = DiffusionProcess(ema.model, 1000).to(device)
-        validation = _validation_loss(validation_process, valid_loader, device, seed)
-        train_loss = running / max(batches, 1)
+            for key in running: running[key] += float(details[key].detach())
+            batches += 1
+        validation_process = DiffusionProcess(ema.model, 1000, min_snr_gamma=min_snr_gamma).to(device)
+        validation_details = _validation_loss(validation_process, valid_loader, device, seed)
+        train_details = {key: value / max(batches, 1) for key, value in running.items()}
+        train_loss, validation = train_details["loss"], validation_details["loss"]
         improved = validation < best - min_delta
         if improved: best, stale = validation, 0
         else: stale += 1
         row = {
             "epoch": epoch + 1, "train_loss": train_loss, "validation_loss": validation,
+            "train_unweighted_epsilon_mse": train_details["unweighted_epsilon_mse"],
+            "validation_unweighted_epsilon_mse": validation_details["unweighted_epsilon_mse"],
+            "train_mean_snr": train_details["mean_snr"], "validation_mean_snr": validation_details["mean_snr"],
+            "train_mean_min_snr_weight": train_details["mean_min_snr_weight"],
+            "validation_mean_min_snr_weight": validation_details["mean_min_snr_weight"],
             "best_validation_loss": best, "learning_rate": optimizer.param_groups[0]["lr"],
             "elapsed_seconds": time.perf_counter() - started,
         }

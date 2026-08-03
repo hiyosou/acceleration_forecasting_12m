@@ -88,9 +88,11 @@ class AttentionStage(nn.Module):
 class AbsoluteAttentionUNet12(nn.Module):
     """Cross-attention denoiser with lengths 12 -> 6 -> 3 -> 6 -> 12."""
 
-    def __init__(self, dropout=0.1):
+    def __init__(self, dropout=0.1, condition_indicator=False):
         super().__init__()
-        self.condition_encoder = nn.Sequential(nn.Linear(11, 128), nn.SiLU(), nn.Linear(128, 128))
+        self.condition_indicator = bool(condition_indicator)
+        condition_size = 12 if self.condition_indicator else 11
+        self.condition_encoder = nn.Sequential(nn.Linear(condition_size, 128), nn.SiLU(), nn.Linear(128, 128))
         self.time_encoder = TimeEmbedding(128)
         self.guide_encoder = GuideEncoder12()
         self.input = nn.Conv1d(1, 64, 3, padding=1)
@@ -116,8 +118,14 @@ class AbsoluteAttentionUNet12(nn.Module):
         return values
 
     def forward(self, noisy, timesteps, batch):
+        raw_condition = torch.cat([batch["current"], batch["history"], batch["history_mask"]], dim=-1)
+        if self.condition_indicator:
+            present = batch.get("condition_present")
+            if present is None:
+                present = torch.ones((raw_condition.shape[0], 1), device=raw_condition.device, dtype=raw_condition.dtype)
+            raw_condition = torch.cat([raw_condition, present], dim=-1)
         condition = torch.cat([
-            self.condition_encoder(torch.cat([batch["current"], batch["history"], batch["history_mask"]], dim=-1)),
+            self.condition_encoder(raw_condition),
             self.time_encoder(timesteps),
         ], dim=-1)
         guides = self.guide_encoder(batch["guide_values"], batch["guide_deltas"], batch["guide_similarities"])

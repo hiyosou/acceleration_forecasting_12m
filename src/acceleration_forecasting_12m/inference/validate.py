@@ -16,7 +16,7 @@ from .sampling import load_process, sample_target
 
 def validate(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=100,
              sampling_steps=50, max_records=None, seed=42, progress=True,
-             initial_noise_scale=1.0):
+             initial_noise_scale=1.0, cfg_scale=1.0, variance_scale=1.0):
     dataset_dir, output_dir = Path(dataset_dir).resolve(), Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -28,7 +28,8 @@ def validate(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=10
         meta = dataset.metadata.iloc[index]; target_id = str(meta["target_id"])
         samples = sample_target(process, dataset, index, target_id, num_samples=num_samples,
                                 sampling_steps=sampling_steps, device=device, seed=seed,
-                                initial_noise_scale=initial_noise_scale)
+                                initial_noise_scale=initial_noise_scale, cfg_scale=cfg_scale,
+                                variance_scale=variance_scale)
         median = np.median(samples, axis=0); p10 = np.percentile(samples, 10, axis=0); p90 = np.percentile(samples, 90, axis=0)
         metrics = target_metrics(dataset.physical_target(index), dataset.target_masks[index], median, p10, p90)
         if metrics is not None:
@@ -44,5 +45,6 @@ def validate(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=10
         "target_count": int(len(frame)), "all_finite": bool(np.isfinite(frame[["MAE", "RMSE", "mean_interval_width"]]).all().all()),
         "forecast_months": 12, "num_samples": int(num_samples), "sampling_steps": int(sampling_steps),
         "initial_noise_scale": float(initial_noise_scale),
+        "cfg_scale": float(cfg_scale), "variance_scale": float(variance_scale),
     })
     write_json(output_dir / "validation_summary.json", summary); return summary

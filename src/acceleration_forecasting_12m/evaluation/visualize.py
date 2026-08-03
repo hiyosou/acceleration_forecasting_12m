@@ -27,8 +27,25 @@ def plot_target(path, metadata, history_values, history_masks, guide_values, gui
     for axis in (top, bottom): axis.set_facecolor("none")
 
     if actual_history is not None and not actual_history.empty:
-        top.scatter(pd.to_datetime(actual_history["measurement_date"]), actual_history["current_acc_z_max"],
-                    s=22, color="0.55", alpha=0.65, label="全実測値", zorder=2)
+        speed = pd.to_numeric(actual_history.get("velocity"), errors="coerce")
+        finite_speed = speed.notna()
+        speed_scatter = None
+        if finite_speed.any():
+            speed_scatter = top.scatter(
+                pd.to_datetime(actual_history.loc[finite_speed, "measurement_date"]),
+                actual_history.loc[finite_speed, "current_acc_z_max"],
+                s=24, c=speed.loc[finite_speed], cmap="jet", vmin=0, vmax=100,
+                alpha=0.72, label="全実測値", zorder=2,
+            )
+        if (~finite_speed).any():
+            top.scatter(
+                pd.to_datetime(actual_history.loc[~finite_speed, "measurement_date"]),
+                actual_history.loc[~finite_speed, "current_acc_z_max"],
+                s=24, color="0.55", alpha=0.65, label="全実測値（速度欠損）", zorder=2,
+            )
+        if speed_scatter is not None:
+            colorbar = fig.colorbar(speed_scatter, ax=top, pad=0.01)
+            colorbar.set_label("走行速度 [km/h]")
     valid_history = np.asarray(history_masks, bool)
     history_date_array = np.asarray(history_dates, dtype=object)
     top.plot(history_date_array[valid_history], np.asarray(history_values)[valid_history],

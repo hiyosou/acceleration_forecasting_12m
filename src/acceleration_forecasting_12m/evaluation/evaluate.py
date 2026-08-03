@@ -80,6 +80,20 @@ def evaluate(dataset_dir, prediction_dir, output_dir, *, bootstrap=1000, seed=42
                        "difference": summary[name] - previous[name]}
                       for name in metric_names if name in previous and name in summary]
         pd.DataFrame(comparison).to_csv(output_dir / "comparison_with_residual.csv", index=False, encoding="utf-8-sig")
+    comparison_sources = {
+        "residual": output_dir.parent / "evaluation" / "evaluation_summary.json",
+        "absolute_attention": output_dir.parent / "evaluation_absolute_attention" / "evaluation_summary.json",
+        "variance_selected": output_dir / "evaluation_summary.json",
+    }
+    model_rows = []
+    for model_name, summary_path in comparison_sources.items():
+        if not summary_path.is_file():
+            continue
+        import json
+        values = json.loads(summary_path.read_text(encoding="utf-8"))
+        model_rows.append({"model": model_name, **{name: values.get(name) for name in metric_names}})
+    if model_rows:
+        pd.DataFrame(model_rows).to_csv(output_dir / "comparison_all_models.csv", index=False, encoding="utf-8-sig")
     if plot and not frame.empty:
         selected = frame.sort_values("RMSE", ascending=False).head(int(plot_max_targets))["target_id"].astype(str).tolist()
         samples = _sample_map(prediction_dir / "samples", set(selected))

@@ -17,7 +17,7 @@ from .sampling import load_process, sample_target
 
 def predict(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=100,
             sampling_steps=50, save_samples=True, max_records=None, seed=42, progress=True,
-            initial_noise_scale=1.0):
+            initial_noise_scale=1.0, cfg_scale=1.0, variance_scale=1.0):
     dataset_dir, output_dir = Path(dataset_dir).resolve(), Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True); sample_dir = output_dir / "samples"; sample_dir.mkdir(exist_ok=True)
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -37,6 +37,8 @@ def predict(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=100
             and str(previous.get("checkpoint")) == str(Path(checkpoint).resolve())
             and previous.get("physical_bounds") == [PHYSICAL_MIN, PHYSICAL_MAX]
             and float(previous.get("initial_noise_scale", -1)) == float(initial_noise_scale)
+            and float(previous.get("cfg_scale", -1)) == float(cfg_scale)
+            and float(previous.get("variance_scale", -1)) == float(variance_scale)
         )
         if not compatible:
             raise ValueError("Existing prediction output was created with incompatible settings")
@@ -52,7 +54,8 @@ def predict(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=100
         target_id = str(dataset.metadata.iloc[index]["target_id"])
         samples = sample_target(process, dataset, index, target_id, num_samples=num_samples,
                                 sampling_steps=sampling_steps, device=device, seed=seed,
-                                initial_noise_scale=initial_noise_scale)
+                                initial_noise_scale=initial_noise_scale, cfg_scale=cfg_scale,
+                                variance_scale=variance_scale)
         summary = {
             "mean": samples.mean(axis=0), "median": np.median(samples, axis=0),
             "p10": np.percentile(samples, 10, axis=0), "p90": np.percentile(samples, 90, axis=0),
@@ -95,6 +98,7 @@ def predict(dataset_dir, checkpoint, output_dir, *, device=None, num_samples=100
         "num_samples": int(num_samples), "sampling_steps": int(sampling_steps),
         "physical_bounds": [PHYSICAL_MIN, PHYSICAL_MAX],
         "initial_noise_scale": float(initial_noise_scale),
+        "cfg_scale": float(cfg_scale), "variance_scale": float(variance_scale),
         "elapsed_seconds": time.perf_counter() - started, "device": str(device),
         "checkpoint": str(Path(checkpoint).resolve()), "dataset_build_id": checkpoint_data["dataset_build_id"],
     }

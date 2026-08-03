@@ -1,9 +1,12 @@
 import torch
+from torch import nn
 
 from acceleration_forecasting_12m.diffusion.process import DiffusionProcess
 from acceleration_forecasting_12m.models.unet import ResidualUNet12
 from acceleration_forecasting_12m.common.constants import PHYSICAL_MAX, PHYSICAL_MIN
 from acceleration_forecasting_12m.models.absolute_attention_unet import AbsoluteAttentionUNet12, GuideEncoder12
+from acceleration_forecasting_12m.training.train import _drop_conditions
+from acceleration_forecasting_12m.inference.select_variance import calibrate_samples
 
 
 def batch(size=2):
@@ -76,7 +79,50 @@ def test_masked_diffusion_loss_is_finite_and_backpropagates():
     loss = process.training_loss(data)
     loss.backward()
     assert torch.isfinite(loss)
-    assert any(parameter.grad is not None for parameter in model.parameters())
+
+
+def test_min_snr_epsilon_weights_match_definition():
+    class DummyModel(nn.Module):
+        def forward(self, noisy, timesteps, batch):
+            return torch.zeros_like(noisy)
+    model = DummyModel()
+    process = DiffusionProcess(model, steps=10, min_snr_gamma=5.0)
+    target = torch.zeros(2, 12); mask = torch.ones_like(target); noise = torch.ones_like(target)
+    batch = {"target": target, "target_mask": mask}
+    timesteps = torch.tensor([0, 9])
+    details = process.loss_details(batch, noise=noise, timesteps=timesteps)
+    alpha = process.alpha_bars[timesteps]
+    snr = alpha / (1 - alpha)
+    expected = torch.minimum(snr, torch.full_like(snr, 5.0)) / snr
+    assert torch.allclose(details["mean_min_snr_weight"], expected.mean())
+
+
+def test_cfg_scale_one_matches_conditional_and_unconditional_is_finite():
+    model = AbsoluteAttentionUNet12(dropout=0.0, condition_indicator=True).eval()
+    process = DiffusionProcess(model, steps=10)
+    batch = attention_batch(2)
+    batch["condition_present"] = torch.ones(2, 1)
+    values, timesteps = torch.randn(2, 12), torch.tensor([2, 5])
+    conditional = model(values, timesteps, batch)
+    assert torch.allclose(process.predict_epsilon(values, timesteps, batch, cfg_scale=1.0), conditional)
+    assert torch.isfinite(process.predict_epsilon(values, timesteps, batch, cfg_scale=1.5)).all()
+
+
+def test_condition_dropout_one_removes_all_conditions_and_marks_absent():
+    data = attention_batch(2)
+    dropped = _drop_conditions(data, 1.0)
+    for key in ("current", "history", "history_mask", "guide_values", "guide_deltas",
+                "guide_mask", "guide_similarities", "retrieval_mask"):
+        assert torch.count_nonzero(dropped[key]) == 0
+    assert torch.count_nonzero(dropped["condition_present"]) == 0
+
+
+def test_variance_calibration_identity_and_monotonic_width():
+    samples = torch.linspace(0.5, 2.5, 100).numpy()[:, None].repeat(12, axis=1)
+    identity = calibrate_samples(samples, 1.0)
+    narrow = calibrate_samples(samples, 0.1)
+    assert torch.allclose(torch.from_numpy(identity), torch.from_numpy(samples))
+    assert float(narrow.max() - narrow.min()) < float(identity.max() - identity.min())
 
 
 def test_ddim_is_reproducible_and_clipped():

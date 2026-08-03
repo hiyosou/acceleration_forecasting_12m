@@ -42,6 +42,14 @@ def parser():
     train_parser.add_argument("--batch-size", type=int, default=128)
     train_parser.add_argument("--no-resume", action="store_true")
     train_parser.add_argument("--no-progress", action="store_true")
+    train_parser.add_argument("--min-snr-gamma", type=float)
+    train_parser.add_argument("--condition-dropout", type=float, default=0.0)
+
+    diagnostic = commands.add_parser("diagnose-noise", help="Diagnose timestep errors and condition usage")
+    diagnostic.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets_absolute_attention"))
+    diagnostic.add_argument("--checkpoint", default=str(DEFAULT_ARTIFACTS / "models_absolute_attention" / "unet" / "best_model.pt"))
+    diagnostic.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "diagnostics_absolute_attention"))
+    diagnostic.add_argument("--device")
 
     validation = commands.add_parser("validate", help="validationを100系列で評価")
     validation.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets"))
@@ -72,6 +80,23 @@ def parser():
     prediction.add_argument("--no-save-samples", action="store_true")
     prediction.add_argument("--no-progress", action="store_true")
     prediction.add_argument("--initial-noise-scale", type=float, default=1.0)
+    prediction.add_argument("--cfg-scale", type=float, default=1.0)
+    prediction.add_argument("--variance-scale", type=float, default=1.0)
+
+    variance = commands.add_parser("select-variance-config", help="Compare Min-SNR, CFG and calibrated sampling")
+    variance.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets_absolute_attention"))
+    variance.add_argument("--min-snr-checkpoint", default=str(DEFAULT_ARTIFACTS / "models_absolute_attention_min_snr" / "unet" / "best_model.pt"))
+    variance.add_argument("--cfg-checkpoint", default=str(DEFAULT_ARTIFACTS / "models_absolute_attention_min_snr_cfg" / "unet" / "best_model.pt"))
+    variance.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "validation_absolute_attention_variance"))
+    variance.add_argument("--device"); variance.add_argument("--num-samples", type=int, default=100)
+    variance.add_argument("--no-progress", action="store_true")
+
+    predict_variance = commands.add_parser("predict-variance", help="Predict with selected variance configuration")
+    predict_variance.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets_absolute_attention"))
+    predict_variance.add_argument("--selection", default=str(DEFAULT_ARTIFACTS / "validation_absolute_attention_variance" / "selected_variance_config.json"))
+    predict_variance.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "predictions_absolute_attention_variance"))
+    predict_variance.add_argument("--device"); predict_variance.add_argument("--num-samples", type=int, default=100)
+    predict_variance.add_argument("--no-progress", action="store_true")
 
     evaluation = commands.add_parser("evaluate", help="正解分離後に予測を評価")
     evaluation.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets"))
@@ -83,6 +108,14 @@ def parser():
     evaluation.add_argument("--y-max", type=float, default=6.0)
     evaluation.add_argument("--dpi", type=int, default=150)
     evaluation.add_argument("--no-progress", action="store_true")
+
+    evaluate_variance = commands.add_parser("evaluate-variance", help="Evaluate selected variance prediction")
+    evaluate_variance.add_argument("--dataset-dir", default=str(DEFAULT_ARTIFACTS / "datasets_absolute_attention"))
+    evaluate_variance.add_argument("--prediction-dir", default=str(DEFAULT_ARTIFACTS / "predictions_absolute_attention_variance"))
+    evaluate_variance.add_argument("--output-dir", default=str(DEFAULT_ARTIFACTS / "evaluation_absolute_attention_variance"))
+    evaluate_variance.add_argument("--bootstrap", type=int, default=1000); evaluate_variance.add_argument("--plot", action="store_true")
+    evaluate_variance.add_argument("--plot-max-targets", type=int, default=195); evaluate_variance.add_argument("--y-max", type=float, default=6.0)
+    evaluate_variance.add_argument("--dpi", type=int, default=150); evaluate_variance.add_argument("--no-progress", action="store_true")
     return root
 
 
@@ -107,7 +140,11 @@ def main(argv=None):
         result = train(
             args.dataset_dir, args.output_dir, device=args.device, epochs=args.epochs,
             batch_size=args.batch_size, resume=not args.no_resume, progress=not args.no_progress,
+            min_snr_gamma=args.min_snr_gamma, condition_dropout=args.condition_dropout,
         )
+    elif args.command == "diagnose-noise":
+        from .inference.diagnose_noise import diagnose_noise
+        result = diagnose_noise(args.dataset_dir, args.checkpoint, args.output_dir, device=args.device)
     elif args.command == "validate":
         from .inference.validate import validate
         result = validate(
@@ -123,6 +160,18 @@ def main(argv=None):
             num_samples=args.num_samples, max_records=args.max_records,
             progress=not args.no_progress,
         )
+    elif args.command == "select-variance-config":
+        from .inference.select_variance import select_variance_config
+        result = select_variance_config(args.dataset_dir, args.min_snr_checkpoint, args.cfg_checkpoint,
+                                        args.output_dir, device=args.device, num_samples=args.num_samples,
+                                        progress=not args.no_progress)
+    elif args.command == "predict-variance":
+        from .inference.predict import predict
+        config = json.loads(open(args.selection, encoding="utf-8").read())
+        result = predict(args.dataset_dir, config["checkpoint"], args.output_dir, device=args.device,
+                         num_samples=args.num_samples, sampling_steps=int(config["sampling_steps"]),
+                         progress=not args.no_progress, initial_noise_scale=float(config["initial_noise_scale"]),
+                         cfg_scale=float(config["cfg_scale"]), variance_scale=float(config["variance_scale"]))
     elif args.command == "predict":
         from .inference.predict import predict
         result = predict(
@@ -131,14 +180,17 @@ def main(argv=None):
             save_samples=not args.no_save_samples, max_records=args.max_records,
             progress=not args.no_progress,
             initial_noise_scale=args.initial_noise_scale,
+            cfg_scale=args.cfg_scale, variance_scale=args.variance_scale,
         )
-    else:
+    elif args.command in {"evaluate", "evaluate-variance"}:
         from .evaluation.evaluate import evaluate
         result = evaluate(
             args.dataset_dir, args.prediction_dir, args.output_dir,
             bootstrap=args.bootstrap, plot=args.plot, plot_max_targets=args.plot_max_targets,
             y_max=args.y_max, dpi=args.dpi, progress=not args.no_progress,
         )
+    else:
+        raise ValueError(f"Unsupported command: {args.command}")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
