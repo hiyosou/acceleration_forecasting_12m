@@ -166,3 +166,48 @@ def test_ddim_is_reproducible_and_clipped():
     assert torch.allclose(first, second)
     assert torch.isfinite(first).all()
     assert first.min() >= -2 and first.max() <= 2
+
+
+def test_v_target_inverse_recovers_clean_and_noise():
+    class Zero(nn.Module):
+        def forward(self, noisy, timesteps, batch):
+            return torch.zeros_like(noisy)
+
+    process = DiffusionProcess(Zero(), steps=20, prediction_type="v_prediction")
+    target, noise = torch.randn(2, 12), torch.randn(2, 12)
+    timesteps = torch.tensor([3, 15])
+    alpha = process.alpha_bars[timesteps][:, None]
+    noisy = alpha.sqrt() * target + (1 - alpha).sqrt() * noise
+    velocity = alpha.sqrt() * noise - (1 - alpha).sqrt() * target
+    clean, recovered_noise = process.model_output_to_x0_epsilon(noisy, velocity, alpha)
+    assert torch.allclose(clean, target, atol=1e-5)
+    assert torch.allclose(recovered_noise, noise, atol=1e-5)
+
+
+def test_masked_plain_v_mse_has_no_snr_weighting():
+    class Zero(nn.Module):
+        def forward(self, noisy, timesteps, batch):
+            return torch.zeros_like(noisy)
+
+    process = DiffusionProcess(Zero(), steps=20, prediction_type="v_prediction")
+    data = batch(); data["target_mask"][:, :4] = 0
+    details = process.loss_details(
+        data, noise=torch.ones_like(data["target"]), timesteps=torch.tensor([2, 10])
+    )
+    assert torch.isfinite(details["unweighted_v_mse"])
+    assert torch.allclose(details["loss"], details["unweighted_v_mse"])
+    import pytest
+    with pytest.raises(ValueError, match="Min-SNR"):
+        DiffusionProcess(Zero(), steps=20, prediction_type="v_prediction", min_snr_gamma=5.0)
+
+
+def test_v_ddim_is_reproducible_and_finite():
+    model = ResidualUNet12(dropout=0).eval()
+    process = DiffusionProcess(model, steps=20, prediction_type="v_prediction")
+    data = batch(1); condition = {key: data[key] for key in ("current", "history", "history_mask")}
+    first = process.ddim(condition, shape=(1, 12), sampling_steps=5, normalized_clip=(-2, 2),
+                         generator=torch.Generator().manual_seed(42))
+    second = process.ddim(condition, shape=(1, 12), sampling_steps=5, normalized_clip=(-2, 2),
+                          generator=torch.Generator().manual_seed(42))
+    assert torch.allclose(first, second)
+    assert torch.isfinite(first).all()

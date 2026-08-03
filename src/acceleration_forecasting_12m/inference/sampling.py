@@ -30,7 +30,10 @@ def load_process(checkpoint_path, device):
     else:
         model = ResidualUNet12(config["dropout"])
     model.load_state_dict(checkpoint["ema_state_dict"]); model.eval()
-    return DiffusionProcess(model, 1000, min_snr_gamma=config.get("min_snr_gamma")).to(device), checkpoint
+    return DiffusionProcess(
+        model, 1000, min_snr_gamma=config.get("min_snr_gamma"),
+        prediction_type=config.get("prediction_type", "epsilon"),
+    ).to(device), checkpoint
 
 
 def deterministic_seed(target_id, sample_offset=0, base_seed=42):

@@ -51,7 +51,8 @@ def _drop_conditions(batch, probability):
 
 @torch.inference_mode()
 def _validation_loss(process, loader, device, seed=42):
-    process.model.eval(); sums = {key: 0.0 for key in ("loss", "unweighted_epsilon_mse", "mean_snr", "mean_min_snr_weight")}; count = 0
+    keys = ("loss", "unweighted_prediction_mse", "x0_mae_normalized", "x0_rmse_normalized", "mean_snr", "mean_min_snr_weight")
+    process.model.eval(); sums = {key: 0.0 for key in keys}; count = 0
     generator = torch.Generator(device=device).manual_seed(seed)
     for batch in loader:
         batch = _move(batch, device)
@@ -68,7 +69,7 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
           accumulation_steps=2, learning_rate=1e-4, weight_decay=1e-4,
           dropout=0.1, patience=20, min_delta=1e-4, ema_decay=0.999,
           seed=42, resume=True, progress=True, min_snr_gamma=None, condition_dropout=0.0,
-          attention_type=None):
+          attention_type=None, prediction_type="epsilon"):
     torch.manual_seed(seed)
     dataset_dir, output_dir = Path(dataset_dir).resolve(), Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +88,10 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
         raise ValueError("attention_type must be none, cross_attention, or reference_modulated")
     if not absolute and attention_type != "none":
         raise ValueError("Attention models require an absolute-value dataset")
+    if prediction_type not in {"epsilon", "v_prediction"}:
+        raise ValueError("prediction_type must be epsilon or v_prediction")
+    if prediction_type == "v_prediction" and min_snr_gamma is not None:
+        raise ValueError("v_prediction requires plain masked v-MSE; omit --min-snr-gamma")
     cfg_enabled = absolute and float(condition_dropout) > 0
     model_config = {"dropout": float(dropout), "forecast_months": 12,
                     "cross_attention": attention_type == "cross_attention", "target_mode": target_mode,
@@ -95,7 +100,7 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
                     "attention_type": attention_type, "reference_tokens": 36 if attention_type == "reference_modulated" else None,
                     "reference_dim": 64 if attention_type == "reference_modulated" else None,
                     "reference_injection_blocks": 10 if attention_type == "reference_modulated" else None,
-                    "prediction_type": "epsilon"}
+                    "prediction_type": prediction_type}
     if attention_type == "reference_modulated":
         if cfg_enabled:
             raise ValueError("Reference-modulated model does not use classifier-free guidance")
@@ -105,7 +110,7 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
     else:
         model = ResidualUNet12(dropout)
     model = model.to(device)
-    process = DiffusionProcess(model, 1000, min_snr_gamma=min_snr_gamma).to(device)
+    process = DiffusionProcess(model, 1000, min_snr_gamma=min_snr_gamma, prediction_type=prediction_type).to(device)
     ema = EMA(model, ema_decay); optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lambda epoch: _learning_rate_factor(epoch, epochs)
@@ -130,7 +135,8 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
     started = time.perf_counter()
     for epoch in outer:
         model.train(); optimizer.zero_grad(set_to_none=True)
-        running = {key: 0.0 for key in ("loss", "unweighted_epsilon_mse", "mean_snr", "mean_min_snr_weight")}; batches = 0
+        detail_keys = ("loss", "unweighted_prediction_mse", "x0_mae_normalized", "x0_rmse_normalized", "mean_snr", "mean_min_snr_weight")
+        running = {key: 0.0 for key in detail_keys}; batches = 0
         inner = progress_bar(train_loader, enabled=progress, desc=f"epoch {epoch + 1}", unit="batch", leave=False)
         for batch_index, batch in enumerate(inner):
             batch = _move(batch, device)
@@ -144,7 +150,7 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
                 scaler.step(optimizer); scaler.update(); optimizer.zero_grad(set_to_none=True); ema.update(model)
             for key in running: running[key] += float(details[key].detach())
             batches += 1
-        validation_process = DiffusionProcess(ema.model, 1000, min_snr_gamma=min_snr_gamma).to(device)
+        validation_process = DiffusionProcess(ema.model, 1000, min_snr_gamma=min_snr_gamma, prediction_type=prediction_type).to(device)
         validation_details = _validation_loss(validation_process, valid_loader, device, seed)
         train_details = {key: value / max(batches, 1) for key, value in running.items()}
         train_loss, validation = train_details["loss"], validation_details["loss"]
@@ -153,8 +159,16 @@ def train(dataset_dir, output_dir, *, device=None, epochs=200, batch_size=128,
         else: stale += 1
         row = {
             "epoch": epoch + 1, "train_loss": train_loss, "validation_loss": validation,
-            "train_unweighted_epsilon_mse": train_details["unweighted_epsilon_mse"],
-            "validation_unweighted_epsilon_mse": validation_details["unweighted_epsilon_mse"],
+            f"train_unweighted_{'epsilon' if prediction_type == 'epsilon' else 'v'}_mse": train_details["unweighted_prediction_mse"],
+            f"validation_unweighted_{'epsilon' if prediction_type == 'epsilon' else 'v'}_mse": validation_details["unweighted_prediction_mse"],
+            "train_x0_mae_normalized": train_details["x0_mae_normalized"],
+            "validation_x0_mae_normalized": validation_details["x0_mae_normalized"],
+            "train_x0_rmse_normalized": train_details["x0_rmse_normalized"],
+            "validation_x0_rmse_normalized": validation_details["x0_rmse_normalized"],
+            "train_x0_mae_physical": train_details["x0_mae_normalized"] * float(train_data.residual_norm.std),
+            "validation_x0_mae_physical": validation_details["x0_mae_normalized"] * float(valid_data.residual_norm.std),
+            "train_x0_rmse_physical": train_details["x0_rmse_normalized"] * float(train_data.residual_norm.std),
+            "validation_x0_rmse_physical": validation_details["x0_rmse_normalized"] * float(valid_data.residual_norm.std),
             "train_mean_snr": train_details["mean_snr"], "validation_mean_snr": validation_details["mean_snr"],
             "train_mean_min_snr_weight": train_details["mean_min_snr_weight"],
             "validation_mean_min_snr_weight": validation_details["mean_min_snr_weight"],

@@ -81,13 +81,15 @@ def evaluate(dataset_dir, prediction_dir, output_dir, *, bootstrap=1000, seed=42
                       for name in metric_names if name in previous and name in summary]
         pd.DataFrame(comparison).to_csv(output_dir / "comparison_with_residual.csv", index=False, encoding="utf-8-sig")
     output_name = output_dir.name
-    current_label = ("reference_modulated" if "reference_modulated" in output_name else
+    current_label = ("reference_modulated_v" if "reference_modulated_v" in output_name else
+                     "reference_modulated" if "reference_modulated" in output_name else
                      "min_snr_uncalibrated" if "min_snr_uncalibrated" in output_name else
                      "variance_selected")
     comparison_sources = {
         "residual": output_dir.parent / "evaluation" / "evaluation_summary.json",
         "absolute_attention": output_dir.parent / "evaluation_absolute_attention" / "evaluation_summary.json",
         "min_snr_uncalibrated": output_dir.parent / "evaluation_absolute_attention_min_snr_uncalibrated" / "evaluation_summary.json",
+        "reference_modulated_epsilon": output_dir.parent / "evaluation_absolute_reference_modulated" / "evaluation_summary.json",
         current_label: output_dir / "evaluation_summary.json",
     }
     model_rows = []
@@ -104,6 +106,10 @@ def evaluate(dataset_dir, prediction_dir, output_dir, *, bootstrap=1000, seed=42
             comparison_frame.loc[comparison_frame["model"].isin(
                 ["min_snr_uncalibrated", "reference_modulated"]
             )].to_csv(output_dir / "comparison_with_min_snr.csv", index=False, encoding="utf-8-sig")
+        if current_label == "reference_modulated_v":
+            comparison_frame.loc[comparison_frame["model"].isin(
+                ["reference_modulated_epsilon", "reference_modulated_v"]
+            )].to_csv(output_dir / "comparison_with_epsilon.csv", index=False, encoding="utf-8-sig")
     if plot and not frame.empty:
         selected = frame.sort_values("RMSE", ascending=False).head(int(plot_max_targets))["target_id"].astype(str).tolist()
         samples = _sample_map(prediction_dir / "samples", set(selected))
