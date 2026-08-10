@@ -136,6 +136,6 @@ def evaluate(dataset_dir, prediction_dir, output_dir, *, bootstrap=1000, seed=42
                 guide_masks[data_index], None if absolute_mode else baselines[data_index],
                 predictions.loc[predictions["target_id"].astype(str) == target_id],
                 target_values[target_index], target_masks[target_index], samples[target_id], y_max=y_max, dpi=dpi,
-                actual_history=relevant, single_sample_index=0,
+                actual_history=relevant,
             )
     return summary

@@ -13,16 +13,37 @@ import pandas as pd
 plt.rcParams["font.family"] = "MS Gothic"
 
 
+def monthly_histogram_mode(samples, bin_width=0.1):
+    """Return each month's most frequent quantized value, preferring the larger value on ties."""
+    values = np.asarray(samples, dtype=float)
+    if values.ndim != 2 or values.shape[1] != 12:
+        raise ValueError("Samples must have shape [generation, 12]")
+    if not np.isfinite(bin_width) or bin_width <= 0:
+        raise ValueError("Histogram bin width must be finite and positive")
+
+    modes = np.empty(12, dtype=float)
+    for month in range(12):
+        finite = values[np.isfinite(values[:, month]), month]
+        if not len(finite):
+            raise ValueError(f"Month {month + 1} has no finite generated values")
+        # Samples are physically non-negative. Adding one half implements half-up
+        # quantization at bin boundaries instead of NumPy's round-to-even rule.
+        bins = np.floor(finite / bin_width + 0.5).astype(np.int64)
+        unique, counts = np.unique(bins, return_counts=True)
+        modes[month] = unique[counts == counts.max()][-1] * bin_width
+    return modes
+
+
 def plot_target(path, metadata, history_values, history_masks, guide_values, guide_masks,
                 baseline, prediction, actual, target_mask, samples, *, y_max=6.0, dpi=150,
-                actual_history=None, single_sample_index=0):
+                actual_history=None):
     anchor = pd.Timestamp(metadata["anchor_date"])
     history_dates = [pd.Timestamp(value) if value else pd.NaT for value in json.loads(metadata["history_dates"])]
     future_dates = pd.date_range(anchor.replace(day=1) + pd.DateOffset(months=1), periods=12, freq="MS")
     prediction = prediction.sort_values("month_index")
     p10 = prediction["prediction_p10"].to_numpy(float)
     p90 = prediction["prediction_p90"].to_numpy(float)
-    sample = np.asarray(samples[int(single_sample_index)], dtype=float)
+    generated_mode = monthly_histogram_mode(samples)
     fig, (top, bottom) = plt.subplots(2, 1, figsize=(12, 8), constrained_layout=True)
     for axis in (top, bottom): axis.set_facecolor("none")
 
@@ -61,8 +82,8 @@ def plot_target(path, metadata, history_values, history_masks, guide_values, gui
     if baseline is not None:
         top.plot(future_dates, baseline, color="darkorange", linewidth=2, label="Softmax guide baseline")
     top.fill_between(future_dates, p10, p90, color="red", alpha=0.15, label="予測p10-p90")
-    top.scatter(future_dates, sample, s=34, color="red", zorder=6,
-                label=f"生成例 sample {single_sample_index}")
+    top.scatter(future_dates, generated_mode, s=34, color="red", zorder=6,
+                label="生成最頻値")
     valid_target = np.asarray(target_mask, bool)
     top.plot(future_dates[valid_target], np.asarray(actual)[valid_target], "o-", color="black",
              markerfacecolor="white", label="未来正解")
@@ -78,8 +99,8 @@ def plot_target(path, metadata, history_values, history_masks, guide_values, gui
 
     months = np.arange(1, 13)
     bottom.fill_between(months, p10, p90, color="red", alpha=0.15)
-    bottom.scatter(months, sample, s=34, color="darkred", zorder=6,
-                   label=f"生成例 sample {single_sample_index}")
+    bottom.scatter(months, generated_mode, s=34, color="darkred", zorder=6,
+                   label="生成最頻値")
     if baseline is not None: bottom.plot(months, baseline, color="darkorange", linewidth=2, label="guide baseline")
     bottom.plot(months[valid_target], np.asarray(actual)[valid_target], "o-", color="black",
                 markerfacecolor="white", label="未来正解")
